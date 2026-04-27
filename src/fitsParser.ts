@@ -7,6 +7,7 @@ export type AstroImage = {
 export function parseFITS(buffer: ArrayBuffer): AstroImage {
   const view = new DataView(buffer);
   let offset = 0;
+  const MAX_PIXELS = 20_000_000;
   
   let bitpix = 8;
   let naxis1 = 0;
@@ -43,33 +44,52 @@ export function parseFITS(buffer: ArrayBuffer): AstroImage {
       }
     }
   }
+  if (!endFound) {
+    throw new Error('Missing FITS END header');
+  }
 
   const width = naxis1;
   const height = naxis2;
   const channels = naxis3;
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error('Invalid FITS dimensions');
+  }
+  if (channels !== 1 && channels !== 3) {
+    throw new Error(`Unsupported FITS channel count: ${channels}`);
+  }
+  if (![8, 16, 32, -32].includes(bitpix)) {
+    throw new Error(`Unsupported FITS BITPIX value: ${bitpix}`);
+  }
 
   const numPixels = width * height;
+  if (!Number.isFinite(numPixels) || numPixels <= 0 || numPixels > MAX_PIXELS) {
+    throw new Error(`FITS image too large (${width}x${height})`);
+  }
   const totalValues = numPixels * channels;
   const rawData = new Float32Array(totalValues);
 
   for (let i = 0; i < totalValues; i++) {
     let val = 0;
     if (bitpix === 16) {
+      if (offset + 2 > buffer.byteLength) throw new Error('Unexpected end of FITS pixel data');
       val = view.getInt16(offset, false); 
       offset += 2;
       val = (val * bscale) + bzero;
       val = (val / 65535) * 255.0; // Normalize to 0-255
     } else if (bitpix === 32) {
+      if (offset + 4 > buffer.byteLength) throw new Error('Unexpected end of FITS pixel data');
       val = view.getInt32(offset, false);
       offset += 4;
       val = (val * bscale) + bzero;
       val = (val / 4294967295) * 255.0;
     } else if (bitpix === -32) {
+      if (offset + 4 > buffer.byteLength) throw new Error('Unexpected end of FITS pixel data');
       val = view.getFloat32(offset, false);
       offset += 4;
       val = (val * bscale) + bzero;
       val = val * 255.0;
     } else if (bitpix === 8) {
+      if (offset + 1 > buffer.byteLength) throw new Error('Unexpected end of FITS pixel data');
       val = view.getUint8(offset); // Already 0-255
       offset += 1;
     }
@@ -89,12 +109,12 @@ export function parseFITS(buffer: ArrayBuffer): AstroImage {
         rgbaData[dstIdx] = rawData[srcIdx];
         rgbaData[dstIdx + 1] = rawData[numPixels + srcIdx];
         rgbaData[dstIdx + 2] = rawData[numPixels * 2 + srcIdx];
-        rgbaData[dstIdx + 3] = 1.0;
+        rgbaData[dstIdx + 3] = 255.0;
       } else {
         rgbaData[dstIdx] = rawData[srcIdx];
         rgbaData[dstIdx + 1] = rawData[srcIdx];
         rgbaData[dstIdx + 2] = rawData[srcIdx];
-        rgbaData[dstIdx + 3] = 1.0;
+        rgbaData[dstIdx + 3] = 255.0;
       }
     }
   }
